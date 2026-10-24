@@ -43,9 +43,19 @@ describe("Config defaults", () => {
 describe("defaultSelectedSymbols", () => {
   it("contains expected default symbols", async () => {
     const { defaultSelectedSymbols } = await import("../data/seed-symbols");
-    expect(defaultSelectedSymbols).toContain("geram18");
-    expect(defaultSelectedSymbols).toContain("price_dollar_rl");
-    expect(defaultSelectedSymbols).toContain("crypto-bitcoin");
+    expect(defaultSelectedSymbols).toEqual([
+      "geram18",
+      "geram24",
+      "gold_global",
+      "mesghal",
+      "sekeb",
+      "sekeb_old",
+      "rob_sekkeh",
+      "nim_sekeh",
+      "gerami",
+      "price_dollar_rl",
+      "crypto-tether-toman",
+    ]);
   });
 });
 

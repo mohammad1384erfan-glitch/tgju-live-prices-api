@@ -9,17 +9,20 @@ import {
 } from "../lib/normalize";
 
 describe("normalizeToToman", () => {
-  it("converts Rial to Toman for geram18 when value is too large", () => {
-    // 300M is clearly Rial (30M toman × 10)
-    expect(normalizeToToman(300_000_000, "geram18")).toBe(30_000_000);
+  it("converts rial to toman based on the source unit", () => {
+    expect(normalizeToToman(300_000_000, "rial")).toBe(30_000_000);
   });
 
-  it("keeps Toman as-is for geram18 when value is reasonable", () => {
-    expect(normalizeToToman(32_000_000, "geram18")).toBe(32_000_000);
+  it("keeps already-toman values unchanged", () => {
+    expect(normalizeToToman(32_000_000, "toman")).toBe(32_000_000);
   });
 
-  it("does not convert non-geram18 symbols", () => {
-    expect(normalizeToToman(500_000_000, "price_dollar_rl")).toBe(500_000_000);
+  it("keeps USD-denominated values unchanged", () => {
+    expect(normalizeToToman(2_500, "USD")).toBe(2_500);
+  });
+
+  it("keeps native instrument values unchanged", () => {
+    expect(normalizeToToman(500_000_000, "native")).toBe(500_000_000);
   });
 });
 

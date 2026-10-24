@@ -2,32 +2,14 @@
  * Normalize prices: Rial → Toman conversion, sanity checks, formatting.
  */
 
-/**
- * Symbols whose tgju.org profile endpoint returns values already in TOMAN
- * (not rials). Exchange-traded instruments (futures, etc.) use toman directly.
- */
-const SYMBOLS_ALREADY_IN_TOMAN = new Set([
-  "onz",          // mapped to gold_futures (Tehran BME contract, priced in toman)
-]);
+export type PriceSourceUnit = "rial" | "toman" | "USD" | "native";
 
 /**
- * tgju.org API always returns prices in RIALS for OTC/physical assets.
- * Exchange-traded instruments return TOMAN directly.
- * This function converts rials → toman (÷10) where needed.
- *
- * For USD-denominated symbols (crypto, oil, metals) no conversion is needed.
+ * Convert according to the source field's known unit. Magnitude is never used
+ * to infer currency; USD and non-currency instrument values pass through.
  */
-export function normalizeToToman(value: number, symbolId: string, unit = "تومان"): number {
-  if (unit !== "تومان") return value; // USD/EUR denominated — no conversion
-
-  // Some symbols (exchange-traded) already return toman
-  if (SYMBOLS_ALREADY_IN_TOMAN.has(symbolId)) return Math.round(value);
-
-  // OTC/physical market assets from tgju return RIALS — divide by 10 to get TOMAN.
-  if (value >= 1_000) {
-    return Math.round(value / 10);
-  }
-  return value;
+export function normalizeToToman(value: number, sourceUnit: PriceSourceUnit): number {
+  return sourceUnit === "rial" ? Math.round(value / 10) : value;
 }
 
 /**

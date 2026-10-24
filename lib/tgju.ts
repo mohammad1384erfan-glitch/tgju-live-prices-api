@@ -17,6 +17,7 @@ import {
   parseChangePercent,
   sanityCheck,
 } from "./normalize";
+import type { PriceSourceUnit } from "./normalize";
 import { getConfig } from "./config";
 import { isDemoMode, getDemoPrice } from "./mock-prices";
 
@@ -40,7 +41,7 @@ const SYMBOL_API_ALIAS: Record<string, string> = {
   sekeb_old:            "sekeb",         // سکه بهار آزادی → tgju slug is "sekeb"
   gold_global:          "ons",           // اونس/طلای جهانی (USD) → tgju slug "ons"
   "crypto-tether-toman": "crypto-tether", // تتر (تومان) → read irr_price field
-  onz:                  "gold_futures",  // اونس طلا به تومان ≈ قرارداد آتی (مستقیم تومان)
+  onz:                  "gold_futures",  // TGJU reports this profile's source currency in info.currency_unit
 };
 const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
@@ -98,7 +99,7 @@ async function fetchWithRetry(
 // GET https://api.tgju.org/v1/market/indicator/profile/{symbol}
 //
 // Returns:
-//   response.summary.price.plain          → current live price (RIALS for تومان assets)
+//   response.summary.price.plain          → current live price, unit in response.info.currency_unit
 //   response.summary.day_tolerance_dp.plain  → change magnitude (always positive)
 //   response.summary.day_tolerance_dp.value  → HTML with class "high"/"low" = sign
 //   response.info.datetime               → "YYYY-MM-DD HH:MM:SS"
@@ -108,10 +109,126 @@ const SYMBOLS_USE_IRR_PRICE = new Set([
   "crypto-tether-toman", // USDT: price field = 1 USD, irr_price = actual rial price in Iran market
 ]);
 
+// Verified per-symbol source units used only when profile metadata or fallback
+// endpoint responses do not identify the price unit. Tether-toman is excluded
+// because its fallback endpoints do not expose the required rial price field.
+const FALLBACK_PRICE_UNITS: Record<string, PriceSourceUnit> = {
+  geram18: "rial",
+  geram24: "rial",
+  geram1: "rial",
+  mesghal: "rial",
+  sekeb: "rial",
+  sekeb_old: "rial",
+  rob_sekkeh: "rial",
+  nim_sekeh: "rial",
+  gerami: "rial",
+  price_dollar_rl: "rial",
+  price_eur: "rial",
+  price_gbp: "rial",
+  price_aed: "rial",
+  price_try: "rial",
+  price_cny: "rial",
+  price_jpy: "rial",
+  price_chf: "rial",
+  price_cad: "rial",
+  price_aud: "rial",
+  price_kwd: "rial",
+  price_iqd: "rial",
+  price_sgd: "rial",
+  price_hkd: "rial",
+  price_rub: "rial",
+  price_inr: "rial",
+  price_pkr: "rial",
+  price_afn: "rial",
+  price_sar: "rial",
+  price_nok: "rial",
+  price_sek: "rial",
+  price_dkk: "rial",
+  "crypto-bitcoin-toman": "rial",
+  "crypto-ethereum-toman": "rial",
+  mablex: "rial",
+  price_dollar_sana: "rial",
+  price_dollar_nima: "rial",
+  onz: "rial",
+  gold_global: "USD",
+  "crypto-bitcoin": "USD",
+  "crypto-ethereum": "USD",
+  "crypto-tether": "USD",
+  "crypto-bnb": "USD",
+  "crypto-xrp": "USD",
+  "crypto-solana": "USD",
+  "crypto-cardano": "USD",
+  "crypto-dogecoin": "USD",
+  "crypto-polkadot": "USD",
+  "crypto-avalanche": "USD",
+  "crypto-litecoin": "USD",
+  "crypto-chainlink": "USD",
+  "crypto-uniswap": "USD",
+  "crypto-shiba": "USD",
+  "crypto-ton": "USD",
+  "crypto-tron": "USD",
+  "crypto-near": "USD",
+  "crypto-atom": "USD",
+  "crypto-usdc": "USD",
+  "oil-brent": "USD",
+  "oil-wti": "USD",
+  natural_gas: "USD",
+  silver: "USD",
+  platinum: "USD",
+  palladium: "USD",
+  copper: "USD",
+  steel: "USD",
+  aluminium: "USD",
+  zinc: "USD",
+  nickel: "USD",
+  wheat: "USD",
+  corn: "USD",
+  "tse-index": "native",
+  "tse-index-eq": "native",
+  "tse-index-fara": "native",
+};
+
+function parseSourceUnit(currencyUnit: unknown): PriceSourceUnit | null {
+  if (typeof currencyUnit !== "string") return null;
+  const unit = currencyUnit.trim().toLowerCase();
+  if (["ریال", "rial", "irr"].includes(unit)) return "rial";
+  if (["تومان", "toman"].includes(unit)) return "toman";
+  if (["دلار", "usd"].includes(unit)) return "USD";
+  return null;
+}
+
+function normalizeProfilePrice(
+  value: number,
+  symbolId: string,
+  currencyUnit: unknown,
+  usesRialPriceField: boolean
+): number | null {
+  const sourceUnit = usesRialPriceField
+    ? "rial"
+    : parseSourceUnit(currencyUnit) ?? FALLBACK_PRICE_UNITS[symbolId];
+  if (!sourceUnit) {
+    addLog("warn", `Unsupported profile price unit for ${symbolId}: ${String(currencyUnit ?? "missing")}`);
+    return null;
+  }
+  return normalizeToToman(value, sourceUnit);
+}
+
+function normalizeFallbackPrice(value: number, symbolId: string, endpoint: string): number | null {
+  if (symbolId === "crypto-tether-toman") {
+    addLog("warn", `${endpoint} does not provide the rial price field for ${symbolId}`);
+    return null;
+  }
+  const sourceUnit = FALLBACK_PRICE_UNITS[symbolId];
+  if (!sourceUnit) {
+    addLog("warn", `Unsupported ${endpoint} price unit for ${symbolId}`);
+    return null;
+  }
+  return normalizeToToman(value, sourceUnit);
+}
+
 function parseProfileResponse(
   data: unknown,
-  symbolId: string,
-  unit: string
+  symbolId: string
 ): { value: number; change: number; updatedAt: string } | null {
   if (!data || typeof data !== "object") return null;
 
@@ -133,7 +250,13 @@ function parseProfileResponse(
   const value = parseRawPrice(rawPrice as string | number);
   if (!value || value <= 0) return null;
 
-  const normalized = normalizeToToman(value, symbolId, unit);
+  const normalized = normalizeProfilePrice(
+    value,
+    symbolId,
+    infoCurrencyUnit(resp),
+    SYMBOLS_USE_IRR_PRICE.has(symbolId)
+  );
+  if (normalized === null) return null;
 
   // Change %: prefer today's intraday change, fallback to yesterday's change
   const todayMag = summary.day_tolerance_dp?.plain;
@@ -161,14 +284,22 @@ function parseProfileResponse(
   const datetime = String(info?.datetime ?? "");
   let updatedAt: string;
   try {
+    const timestamp = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(datetime)
+      ? `${datetime.replace(" ", "T")}+03:30`
+      : datetime;
     updatedAt = datetime.length >= 10
-      ? new Date(datetime).toISOString()
+      ? new Date(timestamp).toISOString()
       : new Date().toISOString();
   } catch {
     updatedAt = new Date().toISOString();
   }
 
   return { value: normalized, change, updatedAt };
+}
+
+function infoCurrencyUnit(resp: Record<string, unknown>): unknown {
+  const info = resp.info as Record<string, unknown> | undefined;
+  return info?.currency_unit;
 }
 
 // ── OHLC fallback parser — summary-table-data endpoint ───────────────────────
@@ -179,8 +310,7 @@ function parseProfileResponse(
 
 function parseOhlcResponse(
   data: unknown,
-  symbolId: string,
-  unit: string
+  symbolId: string
 ): { value: number; change: number; updatedAt: string } | null {
   if (!data || typeof data !== "object") return null;
 
@@ -193,7 +323,8 @@ function parseOhlcResponse(
   const value = parseRawPrice(row[0]);
   if (!value || value <= 0) return null;
 
-  const normalized = normalizeToToman(value, symbolId, unit);
+  const normalized = normalizeFallbackPrice(value, symbolId, "OHLC");
+  if (normalized === null) return null;
 
   const rawPct = String(row[5] ?? "")
     .replace(/<[^>]*>/g, "")
@@ -207,10 +338,10 @@ function parseOhlcResponse(
 // ── HTML fallback parser ──────────────────────────────────────────────────────
 
 async function fetchFromHtml(
-  symbol: string,
-  unit = "تومان"
+  symbolId: string,
+  apiSlug: string
 ): Promise<{ value: number; change: number; updatedAt: string } | null> {
-  const url = `${TGJU_PROFILE_BASE}/${symbol}/`;
+  const url = `${TGJU_PROFILE_BASE}/${apiSlug}/`;
   try {
     const res = await fetchWithRetry(url, 1, [1000]);
     const html = await res.text();
@@ -251,7 +382,7 @@ async function fetchFromHtml(
 
     const value = parseRawPrice(rawPrice ?? "");
     if (!value) {
-      addLog("warn", `HTML scraper: no price found for ${symbol} (url: ${url})`);
+      addLog("warn", `HTML scraper: no price found for ${symbolId} (url: ${url})`);
       return null;
     }
 
@@ -263,13 +394,15 @@ async function fetchFromHtml(
       .trim();
     const change = parseChangePercent(changeText);
 
+    const normalized = normalizeFallbackPrice(value, symbolId, "HTML");
+    if (normalized === null) return null;
     return {
-      value: normalizeToToman(value, symbol, unit ?? "تومان"),
+      value: normalized,
       change,
       updatedAt: new Date().toISOString(),
     };
   } catch (err) {
-    addLog("warn", `HTML fallback failed for ${symbol}: ${String(err)}`);
+    addLog("warn", `HTML fallback failed for ${symbolId}: ${String(err)}`);
     return null;
   }
 }
@@ -309,7 +442,7 @@ export async function fetchSymbolPrice(
     const res = await fetchWithRetry(url, 2, [500, 1500]);
     const raw = await res.text();
     const data = JSON.parse(raw);
-    result = parseProfileResponse(data, symbol, unit);
+    result = parseProfileResponse(data, symbol);
     if (result) addLog("info", `Profile ok: ${symbol}(${apiSlug}) = ${result.value}`);
     else addLog("warn", `Profile parse fail: ${symbol}(${apiSlug}), raw: ${raw.slice(0, 200)}`);
   } catch (err) {
@@ -323,7 +456,7 @@ export async function fetchSymbolPrice(
       const res = await fetchWithRetry(url, 1, [1000]);
       const raw = await res.text();
       const data = JSON.parse(raw);
-      result = parseOhlcResponse(data, symbol, unit);
+      result = parseOhlcResponse(data, symbol);
       if (result) addLog("info", `OHLC ok: ${symbol}(${apiSlug}) = ${result.value}`);
     } catch (err) {
       addLog("warn", `OHLC failed: ${symbol}(${apiSlug}): ${String(err)}`);
@@ -332,7 +465,7 @@ export async function fetchSymbolPrice(
 
   // Step 3 – HTML fallback (scrape profile page)
   if (!result) {
-    result = await fetchFromHtml(apiSlug, unit);
+    result = await fetchFromHtml(symbol, apiSlug);
     if (result) addLog("info", `HTML ok: ${symbol}(${apiSlug}) = ${result.value}`);
   }
 
